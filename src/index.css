@@ -1,0 +1,122 @@
+@import "tailwindcss";
+
+@theme {
+  /* Forge palette: cold stone workshop, hot metal rewards */
+  --color-slate-deep: #12131c;
+  --color-slate-stone: #1e2030;
+  --color-slate-edge: #2d3145;
+  --color-ember: #ff7a1a;
+  --color-forge: #ffc341;
+  --color-quench: #38e8c8;
+  --color-rune: #8b7bff;
+  --color-fault: #ff4d6d;
+  --color-chalk: #e8e6f0;
+  --color-paper: #f3f1e4;
+  --color-paper-line: #c9d6e8;
+
+  --font-display: "Jersey 10", ui-sans-serif, system-ui;
+  --font-hud: "Silkscreen", ui-monospace, monospace;
+  --font-body: "Space Grotesk", ui-sans-serif, system-ui;
+}
+
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* Standalone mode on iOS runs under the notch and home indicator. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  background: var(--color-slate-deep);
+  color: var(--color-chalk);
+  font-family: var(--font-body);
+  font-feature-settings: "tnum" 1;
+  overscroll-behavior: none;
+}
+
+/* Chunky pixel edges without any images: stacked box-shadows */
+.pixel-edge {
+  box-shadow:
+    0 4px 0 0 var(--color-slate-deep),
+    0 0 0 4px var(--color-slate-edge);
+}
+
+.pixel-edge-hot {
+  box-shadow:
+    0 4px 0 0 #7a3200,
+    0 0 0 4px var(--color-ember);
+}
+
+.pixel-press:active {
+  transform: translateY(4px);
+  box-shadow: 0 0 0 4px var(--color-slate-edge);
+}
+
+/* The workbench: squared exercise-book paper */
+.squared-paper {
+  background-color: var(--color-paper);
+  background-image:
+    linear-gradient(var(--color-paper-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-paper-line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -1px -1px;
+}
+
+@keyframes forge-spark {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(-70px) scale(0.2); opacity: 0; }
+}
+.spark { animation: forge-spark 700ms ease-out forwards; }
+
+@keyframes shake-fault {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+}
+.shake { animation: shake-fault 260ms ease-in-out; }
+
+@keyframes bar-fill {
+  from { width: var(--from, 0%); }
+}
+.bar-grow { animation: bar-fill 500ms cubic-bezier(0.22, 1, 0.36, 1); }
+
+:focus-visible {
+  outline: 3px solid var(--color-quench);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Stop iOS zooming the page when he taps into the answer box. */
+input, textarea, select {
+  font-size: 16px;
+}
+
+/* Standalone launches on a touch device rubber-band while he draws.
+   Lock the body there only, so a resizable Chromebook window still behaves. */
+@media (display-mode: standalone) and (pointer: coarse) {
+  body {
+    position: fixed;
+    inset: 0;
+    overflow: hidden;
+  }
+}
+
+/* On a laptop the answer box is typed into, so the 16px iOS zoom guard
+   can give way to something that matches the question size. */
+@media (min-width: 1024px) {
+  input {
+    font-size: inherit;
+  }
+}
