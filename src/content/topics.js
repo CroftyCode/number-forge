@@ -17,7 +17,9 @@ const frac = (n, d) => {
   return { n: n / g, d: d / g, text: `${n / g}/${d / g}` }
 }
 
-export const topicContent = {
+import { extraContent } from './topics-more.js'
+
+const coreContent = {
   /* ------------------------------------------------------------------ */
   'y6-calc-order': {
     idea:
@@ -590,5 +592,7 @@ export function generateQuestion(topicId, difficulty) {
   const q = gen()
   return { ...q, topicId, difficulty }
 }
+
+export const topicContent = { ...coreContent, ...extraContent }
 
 export const hasContent = (topicId) => Boolean(topicContent[topicId])

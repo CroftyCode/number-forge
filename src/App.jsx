@@ -5,9 +5,26 @@ import {
   nextReviewDate, xpForAttempt, recordAttempt, saveMastery, streakAfterPlay, todayISO
 } from './lib/engine'
 import { topicContent, generateQuestion, isCorrect, findSlip, hasContent } from './content/topics'
+import {
+  levelFromXp, grantNewUnlocks, REWARDS, rewardByCode, loadBattles, recordBattle,
+  bossReady, BOSS_LENGTH, BOSS_PASS, BOSS_XP
+} from './lib/rewards'
+import { isMastered } from './lib/engine'
 import Scratchpad from './components/Scratchpad'
 
 const DIAGNOSTIC_LENGTH = 12
+
+// Escalating noise for a run of correct answers. Keeps the middle of a
+// session from feeling like a worksheet.
+const COMBO_WORDS = [
+  { at: 3, text: 'HEATING UP' },
+  { at: 5, text: 'RED HOT' },
+  { at: 8, text: 'WHITE HOT' },
+  { at: 12, text: 'UNSTOPPABLE' },
+  { at: 16, text: 'FORGE MASTER' },
+  { at: 20, text: 'LEGENDARY' }
+]
+const comboWord = (n) => [...COMBO_WORDS].reverse().find((c) => n >= c.at)?.text ?? null
 
 function useOnline() {
   const [online, setOnline] = useState(navigator.onLine)
@@ -33,6 +50,12 @@ export default function App() {
   const [qSeq, setQSeq] = useState(0)           // bumps once per question shown
   const [pad, setPad] = useState(true)
   const [diagnostic, setDiagnostic] = useState(null)
+  const [battles, setBattles] = useState([])
+  const [bestRun, setBestRun] = useState(0)     // longest correct run this session
+  const [boss, setBoss] = useState(null)        // { queue, index, score } while fighting
+  const [prizes, setPrizes] = useState([])      // freshly earned unlocks, to celebrate
+  const [levelUp, setLevelUp] = useState(null)  // the level he just reached
+  const [flash, setFlash] = useState(null)      // 'hit' | 'miss', drives the screen pulse
   const online = useOnline()
 
   // There is no session to restore, so the Start screen is always the way in.
@@ -55,6 +78,7 @@ export default function App() {
       .select()
       .single()
     setSessionId(session?.id ?? null)
+    setBattles(await loadBattles(loaded.player.id))
 
     if (!loaded.player.diagnostic_complete) {
       startDiagnostic(playable)
@@ -141,7 +165,10 @@ export default function App() {
     const xp = xpForAttempt({ correct, difficulty: question.difficulty, hintsUsed, runLength: newRun })
 
     setRun(newRun)
+    setBestRun((v) => Math.max(v, newRun))
     setSessionXp((v) => v + xp)
+    setFlash(correct ? 'hit' : 'miss')
+    setTimeout(() => setFlash(null), 420)
 
     await recordAttempt({
       playerId: state.player.id,
@@ -163,6 +190,7 @@ export default function App() {
   }
 
   async function nextQuestion() {
+    if (boss) return advanceBoss()
     if (diagnostic) return advanceDiagnostic()
 
     const { topic, question } = current
@@ -225,6 +253,72 @@ export default function App() {
     setView('question')
   }
 
+  /* -------------------------- boss battle --------------------------- */
+
+  // Six of the hardest questions, drawn only from topics he has actually
+  // mastered, no hints, big XP. Once a week, and only once he has enough
+  // mastered to make it a real test.
+  function startBoss() {
+    const { masteredIds } = bossReady({ mastery: state.mastery, topics, battles })
+    const pool = topics.filter((t) => masteredIds.includes(t.id))
+    const shuffled = [...pool].sort(() => Math.random() - 0.5)
+    const queue = Array.from({ length: BOSS_LENGTH }, (_, i) => {
+      const topic = shuffled[i % shuffled.length]
+      return { topic, question: generateQuestion(topic.id, 3) }
+    })
+    setBoss({ queue, index: 0, score: 0 })
+    setQSeq((n) => n + 1)
+    setCurrent({ topic: queue[0].topic, reason: 'boss', question: queue[0].question })
+    setView('question')
+  }
+
+  async function advanceBoss() {
+    const score = boss.score + (lastResult.current ? 1 : 0)
+    const next = boss.index + 1
+
+    if (next < boss.queue.length) {
+      const item = boss.queue[next]
+      setBoss({ ...boss, index: next, score })
+      setQSeq((n) => n + 1)
+      setCurrent({ topic: item.topic, reason: 'boss', question: item.question })
+      setView('question')
+      return
+    }
+
+    const passed = score >= BOSS_PASS
+    const xp = passed ? BOSS_XP : Math.round((BOSS_XP * score) / boss.queue.length / 2)
+    await recordBattle({
+      playerId: state.player.id,
+      topicIds: [...new Set(boss.queue.map((q) => q.topic.id))],
+      score,
+      total: boss.queue.length,
+      passed,
+      xp
+    })
+    const refreshed = await loadBattles(state.player.id)
+    setBattles(refreshed)
+    setSessionXp((v) => v + xp)
+
+    // Celebrate any boss badge straight away rather than at bedtime.
+    const earned = await grantNewUnlocks(state.player.id, state.unlocks ?? [], {
+      player: state.player,
+      level: levelFromXp(state.player.xp_total).level,
+      mastered: state.mastery.filter(isMastered).length,
+      bestRun,
+      bossWins: refreshed.filter((b) => b.passed).length
+    })
+    if (earned.length) {
+      setPrizes(earned)
+      setState((s) => ({
+        ...s,
+        unlocks: [...(s.unlocks ?? []), ...earned.map((r) => ({ item_code: r.code, item_type: r.type }))]
+      }))
+    }
+
+    setBoss({ ...boss, index: next, score, done: true, passed, xp })
+    setView('bossdone')
+  }
+
   async function finishDay(updated = state) {
     const { streak, freezes } = streakAfterPlay(updated.player)
     await supabase.from('players').update({
@@ -241,8 +335,33 @@ export default function App() {
       ended_at: new Date().toISOString()
     }).eq('id', sessionId)
 
-    setState({ ...updated, player: { ...updated.player, streak_current: streak, xp_total: updated.player.xp_total + sessionXp } })
+    const player = { ...updated.player, streak_current: streak, xp_total: updated.player.xp_total + sessionXp }
+    await settleRewards({ ...updated, player })
+    setState({ ...updated, player })
     setView('done')
+  }
+
+  // Works out everything he has earned and celebrates whatever is new.
+  // Called at the end of a day and after a boss battle.
+  async function settleRewards(next) {
+    const before = levelFromXp(next.player.xp_total - sessionXp).level
+    const after = levelFromXp(next.player.xp_total).level
+    if (after > before) setLevelUp(levelFromXp(next.player.xp_total))
+
+    const earned = await grantNewUnlocks(next.player.id, next.unlocks ?? [], {
+      player: next.player,
+      level: after,
+      mastered: (next.mastery ?? []).filter(isMastered).length,
+      bestRun,
+      bossWins: battles.filter((b) => b.passed).length
+    })
+    if (earned.length) {
+      setPrizes(earned)
+      next.unlocks = [
+        ...(next.unlocks ?? []),
+        ...earned.map((r) => ({ item_code: r.code, item_type: r.type }))
+      ]
+    }
   }
 
   const lastResult = useRef(false)
@@ -255,9 +374,11 @@ export default function App() {
 
   const goal = state.player.daily_xp_goal
   const pct = Math.min(100, Math.round((sessionXp / goal) * 100))
+  const lvl = levelFromXp(state.player.xp_total + (view === 'done' ? 0 : sessionXp))
+  const bossState = bossReady({ mastery: state.mastery, topics, battles })
 
   return (
-    <div className="mx-auto flex h-full w-full max-w-3xl flex-col px-4 pb-4 lg:max-w-[1400px] lg:px-8">
+    <div className={`mx-auto flex h-full w-full max-w-3xl flex-col px-4 pb-4 lg:max-w-[1400px] lg:px-8 ${flash ? `flash-${flash}` : ''}`}>
       {!online && (
         <div className="mb-2 rounded-sm bg-fault/20 px-3 py-2 font-hud text-[10px] text-fault">
           NO CONNECTION. YOUR ANSWERS WILL NOT SAVE UNTIL IT IS BACK.
@@ -265,13 +386,28 @@ export default function App() {
       )}
       <Hud
         player={state.player}
+        level={lvl}
         sessionXp={sessionXp}
         goal={goal}
         pct={pct}
+        run={run}
         onParent={() => setView(view === 'parent' ? 'question' : 'parent')}
+        onProgress={() => setView(view === 'progress' ? 'question' : 'progress')}
       />
 
       {view === 'parent' && <ParentSummary state={state} topics={topics} onBack={() => setView('question')} />}
+
+      {view === 'progress' && (
+        <Progress
+          state={state}
+          topics={topics}
+          level={lvl}
+          battles={battles}
+          bossState={bossState}
+          onBoss={startBoss}
+          onBack={() => setView(current?.question ? 'question' : 'done')}
+        />
+      )}
 
       {view === 'lesson' && (
         <Lesson topic={current.topic} onStart={finishLesson} />
@@ -282,8 +418,12 @@ export default function App() {
           key={qSeq}
           topic={current.topic}
           question={current.question}
-          reason={diagnostic ? 'diagnostic' : current.reason}
-          diagnosticProgress={diagnostic ? `${diagnostic.index + 1} of ${diagnostic.queue.length}` : null}
+          reason={boss ? 'boss' : diagnostic ? 'diagnostic' : current.reason}
+          diagnosticProgress={
+            boss ? `${boss.index + 1} of ${boss.queue.length}`
+              : diagnostic ? `${diagnostic.index + 1} of ${diagnostic.queue.length}` : null
+          }
+          noHints={Boolean(boss)}
           onSubmit={async (payload) => {
             const res = await submitAnswer(payload)
             lastResult.current = res.correct
@@ -295,7 +435,26 @@ export default function App() {
         />
       )}
 
-      {view === 'done' && <DayComplete player={state.player} xp={sessionXp} onOut={async () => { await signOut(); location.reload() }} />}
+      {view === 'bossdone' && (
+        <BossResult
+          boss={boss}
+          onBack={() => { setBoss(null); advance(topics, state) }}
+        />
+      )}
+
+      {view === 'done' && (
+        <DayComplete
+          player={state.player}
+          xp={sessionXp}
+          level={lvl}
+          bossReady={bossState.ready}
+          onBoss={startBoss}
+          onProgress={() => setView('progress')}
+        />
+      )}
+
+      {levelUp && <LevelUpToast level={levelUp} onClose={() => setLevelUp(null)} />}
+      {!levelUp && prizes.length > 0 && <PrizeToast prizes={prizes} onClose={() => setPrizes([])} />}
     </div>
   )
 }
@@ -345,27 +504,184 @@ function Auth({ onDone }) {
   )
 }
 
-function Hud({ player, sessionXp, goal, pct, onParent }) {
+function Hud({ player, level, sessionXp, goal, pct, run, onParent, onProgress }) {
+  const combo = comboWord(run)
   return (
     <header className="sticky top-0 z-10 -mx-4 mb-4 bg-slate-deep/95 px-4 pb-3 pt-4 backdrop-blur">
-      <div className="flex items-end justify-between">
-        <div>
+      <div className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
           <p className="font-display text-2xl leading-none text-ember">Number Forge</p>
-          <p className="font-hud text-[10px] text-chalk/45">{player.display_name.toUpperCase()}</p>
+          <button onClick={onProgress} className="font-hud text-[10px] text-chalk/45 hover:text-quench">
+            {player.display_name.toUpperCase()} // LVL {level.level} {level.rank.toUpperCase()}
+          </button>
         </div>
         <div className="flex items-center gap-4">
+          {combo && (
+            <span className="combo-pop hidden font-display text-xl text-forge sm:inline">{combo}</span>
+          )}
           <Stat label="STREAK" value={`${player.streak_current}d`} tone="text-forge" />
           <Stat label="XP TODAY" value={`${sessionXp}/${goal}`} tone="text-quench" />
           <button onClick={onParent} className="font-hud text-[10px] text-chalk/40 hover:text-chalk">DAD</button>
         </div>
       </div>
+
       <div className="mt-3 h-3 w-full overflow-hidden rounded-sm bg-slate-stone">
         <div
           className="bar-grow h-full bg-quench transition-[width] duration-500"
           style={{ width: `${pct}%` }}
         />
       </div>
+
+      {/* Level progress sits under the daily goal so both journeys are visible. */}
+      <div className="mt-1 flex items-center gap-2">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-slate-stone">
+          <div className="h-full bg-ember/70 transition-[width] duration-500" style={{ width: `${level.pct}%` }} />
+        </div>
+        <span className="font-hud text-[9px] text-chalk/35">{level.into}/{level.need} TO LVL {level.level + 1}</span>
+      </div>
     </header>
+  )
+}
+
+/* ------------------------- progress screen ------------------------- */
+
+function Progress({ state, topics, level, battles, bossState, onBoss, onBack }) {
+  const byId = {}
+  for (const m of state.mastery) byId[m.topic_id] = m
+  const owned = new Set((state.unlocks ?? []).map((u) => u.item_code))
+
+  const done = topics.filter((t) => isMastered(byId[t.id]))
+  const started = topics.filter((t) => byId[t.id]?.taught && !isMastered(byId[t.id]))
+  const locked = topics.filter((t) => !byId[t.id]?.taught)
+  const wins = battles.filter((b) => b.passed).length
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto pb-6">
+      <div className="flex items-center justify-between">
+        <p className="font-display text-3xl text-ember">Your forge</p>
+        <button onClick={onBack} className="font-hud text-[10px] text-chalk/50 underline underline-offset-4">BACK</button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Tile label="LEVEL" value={level.level} note={level.rank} />
+        <Tile label="MASTERED" value={`${done.length}/${topics.length}`} note="topics conquered" />
+        <Tile label="BEST STREAK" value={`${state.player.streak_longest}d`} note="days running" />
+        <Tile label="BOSSES WON" value={wins} note={`${battles.length} fought`} />
+      </div>
+
+      {bossState.ready ? (
+        <button
+          onClick={onBoss}
+          className="pixel-edge-hot pixel-press rounded-sm bg-fault/90 px-5 py-4 text-left font-display text-2xl text-slate-deep"
+        >
+          Boss battle ready
+          <span className="mt-1 block font-hud text-[10px] tracking-tight text-slate-deep/70">
+            {BOSS_LENGTH} HARD QUESTIONS, NO HINTS, {BOSS_XP} XP
+          </span>
+        </button>
+      ) : (
+        <p className="rounded-sm bg-slate-stone/60 px-4 py-3 font-hud text-[10px] text-chalk/45">
+          {bossState.already
+            ? 'BOSS ALREADY BEATEN THIS WEEK. A NEW ONE APPEARS ON MONDAY.'
+            : `MASTER ${Math.max(0, 3 - done.length)} MORE TOPIC${3 - done.length === 1 ? '' : 'S'} TO UNLOCK A BOSS BATTLE.`}
+        </p>
+      )}
+
+      <Group title="CONQUERED" tone="text-forge" items={done} byId={byId} />
+      <Group title="IN PROGRESS" tone="text-quench" items={started} byId={byId} />
+      <Group title="NOT STARTED" tone="text-chalk/40" items={locked} byId={byId} />
+
+      <div>
+        <p className="mb-2 font-hud text-[10px] text-rune">REWARDS</p>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {REWARDS.map((r) => (
+            <div
+              key={r.code}
+              className={`rounded-sm px-3 py-2 ${owned.has(r.code) ? 'bg-slate-stone' : 'bg-slate-stone/30'}`}
+            >
+              <p className={`font-hud text-[10px] ${owned.has(r.code) ? 'text-chalk' : 'text-chalk/30'}`}>
+                {owned.has(r.code) ? r.name.toUpperCase() : 'LOCKED'}
+              </p>
+              <p className="font-hud text-[9px] text-chalk/35">{r.note}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function Tile({ label, value, note }) {
+  return (
+    <div className="pixel-edge rounded-sm bg-slate-stone px-3 py-3">
+      <p className="font-hud text-[9px] text-chalk/40">{label}</p>
+      <p className="font-display text-3xl leading-tight text-chalk">{value}</p>
+      <p className="font-hud text-[9px] text-chalk/35">{note}</p>
+    </div>
+  )
+}
+
+function Group({ title, tone, items, byId }) {
+  if (!items.length) return null
+  return (
+    <div>
+      <p className={`mb-2 font-hud text-[10px] ${tone}`}>{title} ({items.length})</p>
+      <div className="flex flex-col gap-1">
+        {items.map((t) => (
+          <div key={t.id} className="flex items-center justify-between gap-3 rounded-sm bg-slate-stone/50 px-3 py-2">
+            <span className="truncate font-hud text-[10px] text-chalk/70">{t.name}</span>
+            <span className="shrink-0 font-hud text-[9px] text-chalk/35">
+              {byId[t.id] ? `${Math.round(byId[t.id].mastery)}%` : '—'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* --------------------------- boss result --------------------------- */
+
+function BossResult({ boss, onBack }) {
+  return (
+    <section className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
+      <p className={`font-display text-7xl leading-none ${boss.passed ? 'text-forge' : 'text-fault'}`}>
+        {boss.passed ? 'Boss down' : 'Boss survived'}
+      </p>
+      <p className="font-display text-4xl text-quench">{boss.score} / {boss.queue.length}</p>
+      <p className="font-hud text-[11px] text-chalk/60">
+        {boss.passed
+          ? `+${boss.xp} XP. THAT WAS THE HARD VERSION OF EVERYTHING YOU HAVE MASTERED.`
+          : `+${boss.xp} XP. YOU NEEDED ${BOSS_PASS}. IT WILL BE BACK NEXT WEEK.`}
+      </p>
+      <button onClick={onBack} className="pixel-edge pixel-press mt-4 rounded-sm bg-slate-edge px-5 py-3 font-hud text-[11px]">
+        BACK TO THE FORGE
+      </button>
+    </section>
+  )
+}
+
+/* ----------------------------- toasts ------------------------------ */
+
+function LevelUpToast({ level, onClose }) {
+  return (
+    <div className="toast-in fixed inset-x-0 bottom-6 z-30 mx-auto w-[min(92%,26rem)] rounded-sm bg-ember px-5 py-4 text-slate-deep shadow-xl">
+      <p className="font-display text-3xl leading-none">Level {level.level}</p>
+      <p className="font-hud text-[10px] tracking-tight">YOU ARE NOW A {level.rank.toUpperCase()}</p>
+      <button onClick={onClose} className="mt-2 font-hud text-[10px] underline underline-offset-4">NICE</button>
+    </div>
+  )
+}
+
+function PrizeToast({ prizes, onClose }) {
+  return (
+    <div className="toast-in fixed inset-x-0 bottom-6 z-30 mx-auto w-[min(92%,26rem)] rounded-sm bg-forge px-5 py-4 text-slate-deep shadow-xl">
+      <p className="font-hud text-[10px] tracking-tight">UNLOCKED</p>
+      {prizes.map((p) => (
+        <p key={p.code} className="font-display text-2xl leading-tight">{p.name}</p>
+      ))}
+      <button onClick={onClose} className="mt-2 font-hud text-[10px] underline underline-offset-4">GOT IT</button>
+    </div>
   )
 }
 
@@ -437,7 +753,7 @@ function Lesson({ topic, onStart }) {
   )
 }
 
-function Question({ topic, question, reason, diagnosticProgress, onSubmit, onNext, pad, setPad }) {
+function Question({ topic, question, reason, diagnosticProgress, noHints, onSubmit, onNext, pad, setPad }) {
   const [value, setValue] = useState('')
   const [hints, setHints] = useState(0)
   const [result, setResult] = useState(null)
@@ -453,9 +769,10 @@ function Question({ topic, question, reason, diagnosticProgress, onSubmit, onNex
   }
 
   const banner =
-    reason === 'diagnostic' ? `WARM UP // ${diagnosticProgress}`
-      : reason === 'review' ? 'BRINGING THIS BACK'
-        : `${topic.strand.toUpperCase()} // ${DIFFICULTY_NAME[question.difficulty].toUpperCase()}`
+    reason === 'boss' ? `BOSS BATTLE // ${diagnosticProgress}`
+      : reason === 'diagnostic' ? `WARM UP // ${diagnosticProgress}`
+        : reason === 'review' ? 'BRINGING THIS BACK'
+          : `${topic.strand.toUpperCase()} // ${DIFFICULTY_NAME[question.difficulty].toUpperCase()}`
 
   return (
     <section className="flex min-h-0 flex-1 flex-col gap-4 overflow-hidden lg:flex-row lg:gap-6">
@@ -495,7 +812,7 @@ function Question({ topic, question, reason, diagnosticProgress, onSubmit, onNex
           PRESS ENTER TO CHECK, THEN ENTER AGAIN FOR THE NEXT ONE
         </p>
 
-        {!result && question.hints?.length > 0 && (
+        {!result && !noHints && question.hints?.length > 0 && (
           <div>
             {hints < question.hints.length && (
               <button
@@ -532,17 +849,28 @@ function Question({ topic, question, reason, diagnosticProgress, onSubmit, onNex
   )
 }
 
-function DayComplete({ player, xp, onOut }) {
+function DayComplete({ player, xp, level, bossReady, onBoss, onProgress }) {
   return (
     <section className="flex flex-1 flex-col items-center justify-center gap-5 text-center">
       <p className="font-display text-7xl leading-none text-forge">Day done</p>
       <p className="font-display text-4xl text-quench">+{xp} XP</p>
       <p className="font-hud text-[11px] text-chalk/60">
-        {player.streak_current} DAY STREAK. COME BACK TOMORROW TO KEEP IT.
+        {player.streak_current} DAY STREAK. LEVEL {level.level}, {level.rank.toUpperCase()}.
       </p>
-      <button onClick={onOut} className="pixel-edge pixel-press mt-4 rounded-sm bg-slate-edge px-5 py-3 font-hud text-[11px]">
-        SIGN OUT
+
+      {bossReady && (
+        <button
+          onClick={onBoss}
+          className="pixel-edge-hot pixel-press mt-2 rounded-sm bg-fault/90 px-6 py-4 font-display text-3xl text-slate-deep"
+        >
+          Boss battle
+        </button>
+      )}
+
+      <button onClick={onProgress} className="pixel-edge pixel-press mt-2 rounded-sm bg-slate-edge px-5 py-3 font-hud text-[11px]">
+        SEE YOUR FORGE
       </button>
+      <p className="font-hud text-[10px] text-chalk/35">COME BACK TOMORROW TO KEEP THE STREAK.</p>
     </section>
   )
 }
