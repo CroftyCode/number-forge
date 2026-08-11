@@ -30,6 +30,7 @@ export default function App() {
   const [sessionXp, setSessionXp] = useState(0)
   const [run, setRun] = useState(0)             // correct in a row this session
   const [current, setCurrent] = useState(null)  // { topic, question, reason }
+  const [qSeq, setQSeq] = useState(0)           // bumps once per question shown
   const [pad, setPad] = useState(true)
   const [diagnostic, setDiagnostic] = useState(null)
   const online = useOnline()
@@ -73,6 +74,7 @@ export default function App() {
     }
     setDiagnostic({ queue: spread, index: 0, results: {} })
     const first = spread[0]
+    setQSeq((n) => n + 1)
     setCurrent({
       topic: first.topic,
       reason: 'diagnostic',
@@ -100,6 +102,7 @@ export default function App() {
       setView('lesson')
       return
     }
+    setQSeq((n) => n + 1)
     setCurrent({ topic, reason, question: generateQuestion(topic.id, difficulty) })
     setView('question')
   }
@@ -125,6 +128,7 @@ export default function App() {
       ]
     }
     setState(updated)
+    setQSeq((n) => n + 1)
     setCurrent({ ...current, question: generateQuestion(current.topic.id, row.difficulty) })
     setView('question')
   }
@@ -192,6 +196,7 @@ export default function App() {
 
     // Stay on the topic while it is still shaky, otherwise move on.
     if (row.mastery < 80) {
+      setQSeq((n) => n + 1)
       setCurrent({ topic, reason: current.reason, question: generateQuestion(topic.id, row.difficulty) })
       setView('question')
     } else {
@@ -211,6 +216,7 @@ export default function App() {
     }
     const item = diagnostic.queue[next]
     setDiagnostic({ ...diagnostic, index: next })
+    setQSeq((n) => n + 1)
     setCurrent({
       topic: item.topic,
       reason: 'diagnostic',
@@ -273,7 +279,7 @@ export default function App() {
 
       {view === 'question' && current?.question && (
         <Question
-          key={current.question.prompt + Math.random()}
+          key={qSeq}
           topic={current.topic}
           question={current.question}
           reason={diagnostic ? 'diagnostic' : current.reason}
