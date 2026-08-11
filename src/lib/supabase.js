@@ -13,7 +13,10 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 // The player only ever sees a name and a 4 digit PIN.
 // Underneath, that maps to a real Supabase account so row level
 // security does the actual work of keeping his data his.
-const DOMAIN = 'players.numberforge.local'
+// Must be a domain Supabase's email validator accepts. A `.local` TLD is
+// rejected outright, which made every sign up fail. example.com is
+// reserved by RFC 2606, so it is always valid and can never receive mail.
+const DOMAIN = 'players.example.com'
 
 const slug = (name) =>
   name.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -24,23 +27,41 @@ const credentials = (name, pin) => ({
   password: `nf-${pin}-forge`
 })
 
+// A dead connection and a wrong PIN are different problems, and telling a
+// player his PIN is wrong when the forge is actually asleep just makes him
+// type it again. Supabase reports unreachable as a failed fetch.
+const isOffline = (error) =>
+  error?.message?.includes('Failed to fetch') || error?.message?.includes('NetworkError')
+
+const OFFLINE = 'Cannot reach the forge right now. Check the internet and try again in a minute.'
+
 export async function signIn(name, pin) {
   const { email, password } = credentials(name, pin)
   const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-  if (error) return { error: 'That name and PIN do not match. Try again.' }
+  if (error) {
+    return { error: isOffline(error) ? OFFLINE : 'That name and PIN do not match. Try again.' }
+  }
   return { user: data.user }
 }
 
 export async function signUp(name, pin) {
   const { email, password } = credentials(name, pin)
   const { data, error } = await supabase.auth.signUp({ email, password })
-  if (error) return { error: error.message }
+  if (error) {
+    // Never show the raw message: it talks about email addresses, and this
+    // form only ever asked for a name.
+    if (isOffline(error)) return { error: OFFLINE }
+    if (error.message?.includes('already registered')) {
+      return { error: 'That name is taken. Pick another one, or sign in with your PIN.' }
+    }
+    return { error: 'Could not set up that smith. Try a different name.' }
+  }
 
   const { error: playerError } = await supabase.from('players').insert({
     user_id: data.user.id,
     display_name: name.trim()
   })
-  if (playerError) return { error: playerError.message }
+  if (playerError) return { error: 'Set up your smith but could not save it. Try signing in.' }
   return { user: data.user }
 }
 
