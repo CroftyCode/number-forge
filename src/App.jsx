@@ -34,12 +34,10 @@ export default function App() {
   const [diagnostic, setDiagnostic] = useState(null)
   const online = useOnline()
 
+  // There is no session to restore, so the Start screen is always the way in.
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (data.session) await boot()
-      else setView('auth')
-      setBooted(true)
-    })
+    setView('auth')
+    setBooted(true)
   }, [])
 
   async function boot() {
