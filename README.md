@@ -13,10 +13,18 @@ npm run dev
 
 ## Deploy
 
-Push this folder to a GitHub repo, then import it into Vercel or
-Netlify. Build command `npm run build`, output directory `dist`.
+Live at https://croftycode.github.io/number-forge/
 
-Set these two environment variables in the host:
+Pushing to `main` builds and publishes automatically via
+`.github/workflows/deploy.yml`. Nothing to run by hand.
+
+Asset paths are all relative (`base: './'` in the Vite config), so the
+build works under a sub-path like `/number-forge/` as well as at a
+domain root. If you ever move it to a host that serves from the root,
+it will still work unchanged.
+
+To host it somewhere else instead, build command `npm run build`,
+output directory `dist`, and set these two environment variables:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_KEY`
