@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, signIn, signUp, signOut, loadPlayer } from './lib/supabase'
+import { supabase, enterForge, signOut, loadPlayer } from './lib/supabase'
 import {
   DIFFICULTY_NAME, chooseNextTopic, nextMastery, nextDifficulty, pushWindow,
   nextReviewDate, xpForAttempt, recordAttempt, saveMastery, streakAfterPlay, todayISO
@@ -307,25 +307,20 @@ function Splash() {
 }
 
 function Auth({ onDone }) {
-  const [name, setName] = useState('')
-  const [pin, setPin] = useState('')
-  const [mode, setMode] = useState('in')
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
   async function go() {
     setError(null)
-    if (name.trim().length < 2) return setError('Type your name.')
-    if (!/^\d{4}$/.test(pin)) return setError('Your PIN is four digits.')
     setBusy(true)
-    const res = mode === 'in' ? await signIn(name, pin) : await signUp(name, pin)
+    const res = await enterForge()
     setBusy(false)
     if (res.error) return setError(res.error)
     onDone()
   }
 
   return (
-    <div className="mx-auto flex h-full max-w-md flex-col justify-center gap-6 px-6">
+    <div className="mx-auto flex h-full max-w-md flex-col justify-center gap-8 px-6">
       <div>
         <h1 className="font-display text-6xl leading-none text-ember">Number Forge</h1>
         <p className="mt-2 font-hud text-[11px] tracking-tight text-chalk/50">
@@ -333,38 +328,14 @@ function Auth({ onDone }) {
         </p>
       </div>
 
-      <div className="flex flex-col gap-3">
-        <label className="font-hud text-[10px] text-chalk/60">NAME</label>
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="pixel-edge rounded-sm bg-slate-stone px-4 py-3 text-lg outline-none"
-          autoComplete="off"
-        />
-        <label className="mt-2 font-hud text-[10px] text-chalk/60">4 DIGIT PIN</label>
-        <input
-          value={pin}
-          onChange={(e) => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
-          inputMode="numeric"
-          className="pixel-edge rounded-sm bg-slate-stone px-4 py-3 text-2xl tracking-[0.6em] outline-none"
-        />
-      </div>
-
       {error && <p className="font-hud text-[11px] text-fault">{error}</p>}
 
       <button
         onClick={go}
         disabled={busy}
-        className="pixel-edge-hot pixel-press rounded-sm bg-ember px-6 py-4 font-display text-3xl text-slate-deep disabled:opacity-60"
+        className="pixel-edge-hot pixel-press rounded-sm bg-ember px-6 py-5 font-display text-4xl text-slate-deep disabled:opacity-60"
       >
-        {busy ? 'Working...' : mode === 'in' ? 'Enter the forge' : 'Create my smith'}
-      </button>
-
-      <button
-        onClick={() => { setMode(mode === 'in' ? 'up' : 'in'); setError(null) }}
-        className="font-hud text-[11px] text-chalk/50 underline underline-offset-4 hover:text-quench"
-      >
-        {mode === 'in' ? 'First time here? Set up a new smith' : 'Already have a smith? Sign in'}
+        {busy ? 'Lighting the forge...' : 'Start'}
       </button>
     </div>
   )

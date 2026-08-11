@@ -69,6 +69,50 @@ export async function signOut() {
   await supabase.auth.signOut()
 }
 
+// This forge has exactly one smith, so there is no login screen. The single
+// account below is created on first press and reused forever after, which
+// keeps progress attached to a real Supabase user and leaves row level
+// security doing its job unchanged.
+//
+// The password sits in the shipped bundle. That is deliberate: it is not
+// protecting anything from him, it just gives the database a user to hang
+// his progress on. Anyone who found the URL could reach the same account.
+const SOLO = {
+  name: 'Charlie',
+  email: `charlie@${DOMAIN}`,
+  password: 'nf-forge-charlie-2026'
+}
+
+export async function enterForge() {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email: SOLO.email,
+    password: SOLO.password
+  })
+  if (!error) return { user: data.user }
+  if (isOffline(error)) return { error: OFFLINE }
+
+  // No account yet: this is the very first press. Make it, then carry on.
+  const { data: created, error: signUpError } = await supabase.auth.signUp({
+    email: SOLO.email,
+    password: SOLO.password
+  })
+  if (signUpError) {
+    return { error: isOffline(signUpError) ? OFFLINE : 'Could not open the forge. Try again in a minute.' }
+  }
+  if (!created.session) {
+    // Email confirmation is still switched on, so there is no session to
+    // work with and the player row below would be refused by RLS.
+    return { error: 'The forge is not finished being set up yet.' }
+  }
+
+  const { error: playerError } = await supabase.from('players').insert({
+    user_id: created.user.id,
+    display_name: SOLO.name
+  })
+  if (playerError) return { error: 'Could not open the forge. Try again in a minute.' }
+  return { user: created.user }
+}
+
 export async function loadPlayer() {
   const { data: auth } = await supabase.auth.getUser()
   if (!auth?.user) return null
