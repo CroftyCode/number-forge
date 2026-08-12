@@ -9,8 +9,8 @@ import { createClient } from '@supabase/supabase-js'
 // and change the single player's progress. That is a deliberate trade for a
 // one-child homework app. Restoring auth means re-adding the auth.users
 // foreign key on players and dropping the `*_anon` policies.
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://qwytrbikxbbbhydvzpav.supabase.co'
-const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY || 'sb_publishable_NU0f4jEVo7LaFcLgubTw1w_Jtxy3QNj'
+const SUPABASE_URL = import.meta.env?.VITE_SUPABASE_URL || 'https://qwytrbikxbbbhydvzpav.supabase.co'
+const SUPABASE_KEY = import.meta.env?.VITE_SUPABASE_KEY || 'sb_publishable_NU0f4jEVo7LaFcLgubTw1w_Jtxy3QNj'
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 

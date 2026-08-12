@@ -1,4 +1,4 @@
-import { supabase } from './supabase'
+import { supabase } from './supabase.js'
 
 export const DIFFICULTY = { EASY: 1, MEDIUM: 2, HARD: 3 }
 export const DIFFICULTY_NAME = { 1: 'Warm', 2: 'Hot', 3: 'White hot' }

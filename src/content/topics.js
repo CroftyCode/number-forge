@@ -48,7 +48,9 @@ const coreContent = {
         return { prompt: `(${a} + ${b}) x ${c} - ${d}`, answer: String((a + b) * c - d), hints: ['Brackets come first, always.', `Work out (${a} + ${b}), then multiply by ${c}.`] }
       },
       3: () => {
-        const a = rnd(2, 5), b = rnd(2, 5), c = rnd(2, 6), d = rnd(2, 4)
+        // c > d keeps the bracket positive and non-zero: (3 - 3) would
+        // make the whole multiply term vanish and test nothing.
+        const a = rnd(2, 5), b = rnd(2, 5), d = rnd(2, 4), c = rnd(d + 1, d + 5)
         return { prompt: `${a}² + ${b} x (${c} - ${d})`, answer: String(a * a + b * (c - d)), hints: ['Brackets, then the power, then multiply, then add.', `${a}² means ${a} x ${a}.`] }
       }
     },
@@ -578,6 +580,11 @@ export function isCorrect(given, expected) {
 }
 
 export function findSlip(topicId, given, question) {
+  // A detector looks for the value a known mistake produces, and sometimes
+  // that value is also the right answer (a 4 by 4 square has equal area and
+  // perimeter). Never accuse someone who got it right.
+  if (isCorrect(given, question?.answer)) return null
+
   const slips = topicContent[topicId]?.slips ?? []
   for (const s of slips) {
     try { if (s.when(given, question)) return s } catch { /* detector misfired, ignore */ }

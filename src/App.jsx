@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { supabase, enterForge, signOut, loadPlayer } from './lib/supabase'
+import { supabase, enterForge, loadPlayer } from './lib/supabase'
 import {
   DIFFICULTY_NAME, chooseNextTopic, nextMastery, nextDifficulty, pushWindow,
   nextReviewDate, xpForAttempt, recordAttempt, saveMastery, streakAfterPlay, todayISO
 } from './lib/engine'
 import { topicContent, generateQuestion, isCorrect, findSlip, hasContent } from './content/topics'
 import {
-  levelFromXp, grantNewUnlocks, REWARDS, rewardByCode, loadBattles, recordBattle,
+  levelFromXp, grantNewUnlocks, REWARDS, loadBattles, recordBattle,
   bossReady, BOSS_LENGTH, BOSS_PASS, BOSS_XP
 } from './lib/rewards'
 import { isMastered } from './lib/engine'
@@ -58,6 +58,20 @@ export default function App() {
   const [flash, setFlash] = useState(null)      // 'hit' | 'miss', drives the screen pulse
   const online = useOnline()
 
+  // The authoritative XP total. Kept in a ref so several awards in quick
+  // succession cannot race each other through React's async state.
+  const xpRef = useRef(0)
+
+  // XP is banked the moment it is earned. Waiting until the end of the day
+  // meant closing the tab early threw away everything, including a boss win.
+  async function awardXp(amount) {
+    if (!amount || !state?.player) return
+    xpRef.current += amount
+    const total = xpRef.current
+    setState((s) => (s ? { ...s, player: { ...s.player, xp_total: total } } : s))
+    await supabase.from('players').update({ xp_total: total }).eq('id', state.player.id)
+  }
+
   // There is no session to restore, so the Start screen is always the way in.
   useEffect(() => {
     setView('auth')
@@ -79,6 +93,7 @@ export default function App() {
       .single()
     setSessionId(session?.id ?? null)
     setBattles(await loadBattles(loaded.player.id))
+    xpRef.current = loaded.player.xp_total
 
     if (!loaded.player.diagnostic_complete) {
       startDiagnostic(playable)
@@ -169,6 +184,14 @@ export default function App() {
     setSessionXp((v) => v + xp)
     setFlash(correct ? 'hit' : 'miss')
     setTimeout(() => setFlash(null), 420)
+
+    // Celebrate the level the moment it is crossed. The HUD updates live, so
+    // waiting until bedtime would show the new level before congratulating him.
+    const beforeXp = xpRef.current
+    if (levelFromXp(beforeXp + xp).level > levelFromXp(beforeXp).level) {
+      setLevelUp(levelFromXp(beforeXp + xp))
+    }
+    await awardXp(xp)
 
     await recordAttempt({
       playerId: state.player.id,
@@ -298,6 +321,7 @@ export default function App() {
     const refreshed = await loadBattles(state.player.id)
     setBattles(refreshed)
     setSessionXp((v) => v + xp)
+    await awardXp(xp)
 
     // Celebrate any boss badge straight away rather than at bedtime.
     const earned = await grantNewUnlocks(state.player.id, state.unlocks ?? [], {
@@ -321,8 +345,9 @@ export default function App() {
 
   async function finishDay(updated = state) {
     const { streak, freezes } = streakAfterPlay(updated.player)
+    // XP is already banked per answer by awardXp, so only the streak and the
+    // session close out here.
     await supabase.from('players').update({
-      xp_total: updated.player.xp_total + sessionXp,
       streak_current: streak,
       streak_longest: Math.max(streak, updated.player.streak_longest),
       streak_freezes: freezes,
@@ -335,7 +360,7 @@ export default function App() {
       ended_at: new Date().toISOString()
     }).eq('id', sessionId)
 
-    const player = { ...updated.player, streak_current: streak, xp_total: updated.player.xp_total + sessionXp }
+    const player = { ...updated.player, streak_current: streak, xp_total: xpRef.current }
     await settleRewards({ ...updated, player })
     setState({ ...updated, player })
     setView('done')
@@ -344,13 +369,11 @@ export default function App() {
   // Works out everything he has earned and celebrates whatever is new.
   // Called at the end of a day and after a boss battle.
   async function settleRewards(next) {
-    const before = levelFromXp(next.player.xp_total - sessionXp).level
-    const after = levelFromXp(next.player.xp_total).level
-    if (after > before) setLevelUp(levelFromXp(next.player.xp_total))
-
+    // Level ups are announced as they happen, in submitAnswer. This only
+    // settles the unlocks, which depend on the finished day's streak.
     const earned = await grantNewUnlocks(next.player.id, next.unlocks ?? [], {
       player: next.player,
-      level: after,
+      level: levelFromXp(next.player.xp_total).level,
       mastered: (next.mastery ?? []).filter(isMastered).length,
       bestRun,
       bossWins: battles.filter((b) => b.passed).length
@@ -374,7 +397,7 @@ export default function App() {
 
   const goal = state.player.daily_xp_goal
   const pct = Math.min(100, Math.round((sessionXp / goal) * 100))
-  const lvl = levelFromXp(state.player.xp_total + (view === 'done' ? 0 : sessionXp))
+  const lvl = levelFromXp(state.player.xp_total)
   const bossState = bossReady({ mastery: state.mastery, topics, battles })
 
   return (

@@ -1,5 +1,5 @@
-import { supabase } from './supabase'
-import { isMastered, todayISO } from './engine'
+import { supabase } from './supabase.js'
+import { isMastered, todayISO } from './engine.js'
 
 /* ============================== levels ============================== */
 

@@ -11,6 +11,11 @@ const gcd = (a, b) => (b === 0 ? Math.abs(a) : gcd(b, a % b))
 const round2 = (n) => Math.round(n * 100) / 100
 const commas = (n) => n.toLocaleString('en-GB')
 
+// Detectors compare his answer against the specific wrong value a known
+// mistake would produce. They only ever run on answers already marked wrong.
+const N = (v) => Number(String(v).replace(/[£$,\s]/g, ''))
+const eq = (g, v) => Number.isFinite(v) && Number.isFinite(N(g)) && Math.abs(N(g) - v) < 1e-9
+
 const frac = (n, d) => {
   const g = gcd(n, d) || 1
   return { n: n / g, d: d / g, text: `${n / g}/${d / g}` }
@@ -38,8 +43,13 @@ export const extraContent = {
       'Saying the digit itself instead of what it is worth. The 6 is not worth 6, it is worth 600,000 because of the column it sits in.',
     gen: {
       1: () => {
-        const digits = Array.from({ length: 6 }, () => rnd(1, 9))
-        const idx = rnd(0, 3)
+        // The chosen digit must appear only once, otherwise "the 3 in 493,342"
+        // has two possible answers and he cannot tell which is wanted.
+        let digits, idx
+        do {
+          digits = Array.from({ length: 6 }, () => rnd(1, 9))
+          idx = rnd(0, 3)
+        } while (digits.filter((d) => d === digits[idx]).length > 1)
         const n = Number(digits.join(''))
         const place = Math.pow(10, 5 - idx)
         return {
@@ -49,8 +59,11 @@ export const extraContent = {
         }
       },
       2: () => {
-        const digits = Array.from({ length: 7 }, () => rnd(1, 9))
-        const idx = rnd(0, 3)
+        let digits, idx
+        do {
+          digits = Array.from({ length: 7 }, () => rnd(1, 9))
+          idx = rnd(0, 3)
+        } while (digits.filter((d) => d === digits[idx]).length > 1)
         const n = Number(digits.join(''))
         const place = Math.pow(10, 6 - idx)
         return {
@@ -60,7 +73,8 @@ export const extraContent = {
         }
       },
       3: () => {
-        const a = rnd(1000000, 9999999), b = rnd(1000000, 9999999)
+        let a, b
+        do { a = rnd(1000000, 9999999); b = rnd(1000000, 9999999) } while (a === b)
         return {
           prompt: `Which is larger, ${commas(a)} or ${commas(b)}? Write the larger number.`,
           answer: String(Math.max(a, b)),
@@ -107,7 +121,7 @@ export const extraContent = {
       }
     },
     slips: [
-      { code: 'rounded-wrong-way', when: () => false, fix: 'Check which digit you looked at. Only the one immediately right of your column decides.' }
+      { code: 'rounded-wrong-way', when: (g, q) => { const m = q.prompt.match(/^Round ([\d,.]+) to the nearest ([\d,]+|thousand)/); if (!m) return false; const n = N(m[1]); const to = m[2] === 'thousand' ? 1000 : N(m[2]); const up = Math.ceil(n / to) * to; const down = Math.floor(n / to) * to; const right = Math.round(n / to) * to; return eq(g, right === up ? down : up) }, fix: 'Check which digit you looked at. Only the one immediately right of your column decides.' }
     ]
   },
 
@@ -137,7 +151,9 @@ export const extraContent = {
         return { prompt: `The temperature is ${start}°C and falls by ${step}°C. What is the new temperature?`, answer: String(start - step), hints: ['Falling means moving left along the number line.', 'Going below zero makes it more negative.'] }
       },
       3: () => {
-        const a = rnd(-15, -2), b = rnd(-15, -2)
+        // Two different numbers, or 'which is larger' has no answer.
+        let a, b
+        do { a = rnd(-15, -2); b = rnd(-15, -2) } while (a === b)
         const lo = Math.min(a, b), hi = Math.max(a, b)
         return { prompt: `Which is larger, ${a} or ${b}? Write the larger number.`, answer: String(hi), hints: ['Further right on the number line is larger.', `${lo} is further from zero, which makes it smaller, not bigger.`] }
       }
@@ -169,7 +185,7 @@ export const extraContent = {
       3: () => { const a = rnd(112, 499), b = rnd(23, 59); return { prompt: `${a} x ${b}`, answer: String(a * b), hints: ['Same method, one more column.', 'Keep the columns lined up.'] } }
     },
     slips: [
-      { code: 'missing-placeholder', when: () => false, fix: 'Check the tens row. Multiplying by 20 needs the zero to hold the place.' }
+      { code: 'missing-placeholder', when: (g, q) => { const m = q.prompt.match(/^(\d+) x (\d+)$/); if (!m) return false; const a = N(m[1]); const b = N(m[2]); if (b < 10) return false; return eq(g, a * (b % 10) + a * Math.floor(b / 10)) }, fix: 'Check the tens row. Multiplying by 20 needs the zero to hold the place.' }
     ]
   },
 
@@ -199,7 +215,7 @@ export const extraContent = {
       }
     },
     slips: [
-      { code: 'lost-remainder', when: () => false, fix: 'The leftover from each step joins the next digit before you divide again.' }
+      { code: 'lost-remainder', when: (g, q) => { const m = q.prompt.match(/^(\d+) ÷ (\d+)\. Give the remainder only\./); if (!m) return false; return eq(g, Math.floor(N(m[1]) / N(m[2]))) }, fix: 'The leftover from each step joins the next digit before you divide again.' }
     ]
   },
 
@@ -221,23 +237,32 @@ export const extraContent = {
       'Thinking 0.65 is bigger because it has more digits. Length is not size after the decimal point.',
     gen: {
       1: () => {
-        const a = round2(rnd(1, 9) / 10), b = round2(rnd(10, 99) / 100)
+        let a, b
+        do { a = round2(rnd(1, 9) / 10); b = round2(rnd(10, 99) / 100) } while (a === b)
         return { prompt: `Which is larger, ${a} or ${b}? Write the larger number.`, answer: String(Math.max(a, b)), hints: ['Compare tenths first.', 'More digits does not mean bigger.'] }
       },
       2: () => {
-        const digits = [rnd(1, 9), rnd(0, 9), rnd(1, 9)]
-        const n = Number(`${rnd(1, 9)}.${digits.join('')}`)
-        const idx = rnd(0, 2)
+        // Same uniqueness rule: the digit asked about must appear once in the
+        // whole number, including the digit before the point.
+        let whole, digits, idx
+        do {
+          whole = rnd(1, 9)
+          digits = [rnd(1, 9), rnd(0, 9), rnd(1, 9)]
+          idx = rnd(0, 2)
+        } while ([whole, ...digits].filter((d) => d === digits[idx]).length > 1)
+        const n = Number(`${whole}.${digits.join('')}`)
         const place = [0.1, 0.01, 0.001][idx]
         return { prompt: `What is the value of the ${digits[idx]} in ${n}?`, answer: String(round2(digits[idx] * place * 1000) / 1000), hints: ['Tenths, then hundredths, then thousandths.', 'Multiply the digit by its column.'] }
       },
       3: () => {
-        const nums = Array.from({ length: 3 }, () => round2(rnd(100, 999) / 100))
+        // All distinct, so 'the largest' is unambiguous.
+        let nums
+        do { nums = Array.from({ length: 3 }, () => round2(rnd(100, 999) / 100)) } while (new Set(nums).size !== 3)
         return { prompt: `Write the largest of these: ${nums.join(', ')}`, answer: String(Math.max(...nums)), hints: ['Compare whole numbers first.', 'Then tenths, then hundredths.'] }
       }
     },
     slips: [
-      { code: 'longer-is-bigger', when: () => false, fix: 'Compare column by column from the left. A longer decimal is not automatically larger.' }
+      { code: 'longer-is-bigger', when: (g, q) => { const m = q.prompt.match(/^Which is larger, ([\d.]+) or ([\d.]+)\?/); if (!m) return false; const a = N(m[1]); const b = N(m[2]); const dp = (t) => (t.split('.')[1] || '').length; const longer = dp(m[1]) >= dp(m[2]) ? a : b; return longer !== Math.max(a, b) && eq(g, longer) }, fix: 'Compare column by column from the left. A longer decimal is not automatically larger.' }
     ]
   },
 
@@ -262,7 +287,9 @@ export const extraContent = {
       'Comparing numerators while the denominators differ. 5/7 is not bigger than 3/4 just because 5 is bigger than 3.',
     gen: {
       1: () => {
-        const d = pick([8, 10, 12]), a = rnd(1, d - 2), b = rnd(1, d - 1)
+        const d = pick([8, 10, 12])
+        let a, b
+        do { a = rnd(1, d - 2); b = rnd(1, d - 1) } while (a === b)
         const x = Math.max(a, b), y = Math.min(a, b)
         return { prompt: `Which is larger, ${y}/${d} or ${x}/${d}? Write the larger fraction.`, answer: `${x}/${d}`, hints: ['Same denominator already.', 'Just compare the tops.'] }
       },
@@ -281,7 +308,7 @@ export const extraContent = {
       }
     },
     slips: [
-      { code: 'compared-tops-only', when: () => false, fix: 'You compared the numerators while the denominators were different. Convert first.' }
+      { code: 'compared-tops-only', when: (g, q) => { const m = q.prompt.match(/^Which is larger, (\d+)\/(\d+) or (\d+)\/(\d+)\?/); if (!m) return false; const a = N(m[1]), b = N(m[2]), c = N(m[3]), d = N(m[4]); const bigTop = a >= c ? `${a}/${b}` : `${c}/${d}`; const right = a / b > c / d ? `${a}/${b}` : `${c}/${d}`; return bigTop !== right && String(g).replace(/\s/g, '') === bigTop }, fix: 'You compared the numerators while the denominators were different. Convert first.' }
     ]
   },
 
@@ -317,7 +344,7 @@ export const extraContent = {
       }
     },
     slips: [
-      { code: 'added-instead', when: () => false, fix: 'Multiplying fractions does not need a common denominator. Tops times tops, bottoms times bottoms.' }
+      { code: 'added-instead', when: (g, q) => { const m = q.prompt.match(/^(\d+)\/(\d+) x (\d+)\/(\d+)$/); if (!m) return false; const a = N(m[1]), b = N(m[2]), c = N(m[3]), d = N(m[4]); return String(g).replace(/\s/g, '') === frac(a * d + c * b, b * d).text }, fix: 'Multiplying fractions does not need a common denominator. Tops times tops, bottoms times bottoms.' }
     ]
   },
 
@@ -343,7 +370,7 @@ export const extraContent = {
       3: () => { const b = pick([8, 12]), w = rnd(5, 25), a = rnd(3, b - 1); return { prompt: `A shop has ${b * w} items and sells ${a}/${b} of them. How many are left?`, answer: String((b - a) * w), hints: ['Work out how many were sold.', 'Or find the fraction left over first.'] } }
     },
     slips: [
-      { code: 'flipped-operation', when: () => false, fix: 'Divide by the bottom number first, then multiply by the top.' }
+      { code: 'flipped-operation', when: (g, q) => { const m = q.prompt.match(/What is (\d+)\/(\d+) of (\d+)\?/); if (!m) return false; return eq(g, (N(m[3]) / N(m[1])) * N(m[2])) }, fix: 'Divide by the bottom number first, then multiply by the top.' }
     ]
   },
 
@@ -369,7 +396,7 @@ export const extraContent = {
       3: () => { const a = round2(rnd(11, 99) / 10), b = round2(rnd(11, 99) / 10); return { prompt: `${a} x ${b}`, answer: String(round2(a * b)), hints: ['Ignore the points, multiply the whole numbers.', 'Then put back one decimal place for each one you removed.'] } }
     },
     slips: [
-      { code: 'added-zero', when: () => false, fix: 'Adding a zero only works for whole numbers. Slide the digits along the columns instead.' }
+      { code: 'added-zero', when: (g, q) => { const m = q.prompt.match(/^([\d.]+) x (10|100)$/); if (!m) return false; return eq(g, N(m[1] + (m[2] === '10' ? '0' : '00'))) }, fix: 'Adding a zero only works for whole numbers. Slide the digits along the columns instead.' }
     ]
   },
 
@@ -452,7 +479,7 @@ export const extraContent = {
       3: () => { const a = rnd(2, 6), x = rnd(2, 8), b = rnd(2, 7), y = rnd(2, 9); return { prompt: `Find the value of ${a}x² - ${b}y when x = ${x} and y = ${y}`, answer: String(a * x * x - b * y), hints: [`x² means ${x} x ${x}.`, 'Powers before multiply, multiply before subtract.'] } }
     },
     slips: [
-      { code: 'concatenated', when: () => false, fix: 'A number written next to a letter means multiply, not digits side by side.' }
+      { code: 'concatenated', when: (g, q) => { const m = q.prompt.match(/Find the value of (\d+)x \+ (\d+) when x = (\d+)/); if (!m) return false; return eq(g, N(m[1] + m[3]) + N(m[2])) }, fix: 'A number written next to a letter means multiply, not digits side by side.' }
     ]
   },
 
@@ -478,7 +505,7 @@ export const extraContent = {
       3: () => { const s = rnd(2, 9), d = rnd(3, 9), n = rnd(8, 20); return { prompt: `A sequence starts at ${s} and goes up by ${d} each time. What is the ${n}th term?`, answer: String(s + (n - 1) * d), hints: [`You take ${n} - 1 steps to reach the ${n}th term.`, `${s} + ${n - 1} x ${d}.`] } }
     },
     slips: [
-      { code: 'off-by-one-term', when: () => false, fix: 'Reaching the nth term takes n - 1 steps from the first one, not n.' }
+      { code: 'off-by-one-term', when: (g, q) => { const m = q.prompt.match(/starts at (\d+) and goes up by (\d+) each time\. What is the (\d+)th term/); if (!m) return false; return eq(g, N(m[1]) + N(m[3]) * N(m[2])) }, fix: 'Reaching the nth term takes n - 1 steps from the first one, not n.' }
     ]
   },
 
@@ -504,7 +531,7 @@ export const extraContent = {
       3: () => { const x = rnd(2, 9); return { prompt: `If n = ${x}, what is the value of n² + n?`, answer: String(x * x + x), hints: [`n² means ${x} x ${x}.`, 'Then add one more n.'] } }
     },
     slips: [
-      { code: 'read-as-digits', when: () => false, fix: 'A number against a letter means multiply. 5n is five times n, not the digits 5 and n.' }
+      { code: 'read-as-digits', when: (g, q) => { const m = q.prompt.match(/If n = (\d+), what is the value of (\d+)n\?$/); if (!m) return false; return eq(g, N(m[2] + m[1])) }, fix: 'A number against a letter means multiply. 5n is five times n, not the digits 5 and n.' }
     ]
   },
 
@@ -526,9 +553,9 @@ export const extraContent = {
     watchOut:
       'Mixing up HCF and LCM. The HCF is never bigger than either number; the LCM is never smaller.',
     gen: {
-      1: () => { const a = rnd(4, 20), b = rnd(4, 20); return { prompt: `Find the HCF of ${a} and ${b}`, answer: String(gcd(a, b)), hints: ['List the factors of each.', 'Find the biggest one they share.'] } },
-      2: () => { const a = rnd(3, 12), b = rnd(3, 12); return { prompt: `Find the LCM of ${a} and ${b}`, answer: String(Math.abs(a * b) / gcd(a, b)), hints: ['Count up in each until they meet.', 'The first shared multiple is the LCM.'] } },
-      3: () => { const a = rnd(20, 60), b = rnd(20, 60); return { prompt: `Find the HCF of ${a} and ${b}`, answer: String(gcd(a, b)), hints: ['Break each into prime factors.', 'Multiply the primes they share.'] } }
+      1: () => { const k = rnd(2, 6); let a, b; do { a = k * rnd(2, 5); b = k * rnd(2, 5) } while (a === b); return { prompt: `Find the HCF of ${a} and ${b}`, answer: String(gcd(a, b)), hints: ['List the factors of each.', 'Find the biggest one they share.'] } },
+      2: () => { let a, b; do { a = rnd(3, 12); b = rnd(3, 12) } while (a === b); return { prompt: `Find the LCM of ${a} and ${b}`, answer: String(Math.abs(a * b) / gcd(a, b)), hints: ['Count up in each until they meet.', 'The first shared multiple is the LCM.'] } },
+      3: () => { const k = rnd(3, 9); let a, b; do { a = k * rnd(3, 8); b = k * rnd(3, 8) } while (a === b); return { prompt: `Find the HCF of ${a} and ${b}`, answer: String(gcd(a, b)), hints: ['Break each into prime factors.', 'Multiply the primes they share.'] } }
     },
     slips: [
       { code: 'hcf-lcm-swap', when: (g, q) => /HCF of (\d+) and (\d+)/.test(q.prompt) && (() => { const m = q.prompt.match(/HCF of (\d+) and (\d+)/); const a = Number(m[1]), b = Number(m[2]); return String(g) === String(Math.abs(a * b) / gcd(a, b)) })(), fix: 'That is the LCM. The HCF is the largest number that divides into both.' }
@@ -558,7 +585,7 @@ export const extraContent = {
       3: () => { const a = rnd(2, 5), x = rnd(-6, -2), b = rnd(2, 6), y = rnd(2, 8); return { prompt: `Find ${a}x² - ${b}y when x = ${x} and y = ${y}`, answer: String(a * x * x - b * y), hints: [`x² means (${x}) x (${x}), which is positive.`, 'Then subtract the second term.'] } }
     },
     slips: [
-      { code: 'sign-lost', when: () => false, fix: 'Check the negative value. Brackets round it stop the sign going missing.' }
+      { code: 'sign-lost', when: (g, q) => { const m = q.prompt.match(/Find (\d+)x \+ (\d+)y when x = (-?\d+) and y = (-?\d+)/); if (!m) return false; const a = N(m[1]), b = N(m[2]), x = N(m[3]), y = N(m[4]); if (y >= 0) return false; return eq(g, a * x + b * Math.abs(y)) }, fix: 'Check the negative value. Brackets round it stop the sign going missing.' }
     ]
   },
 
@@ -584,7 +611,7 @@ export const extraContent = {
       3: () => { const a = rnd(2, 6), b = rnd(2, 7), c = rnd(2, 6), d = rnd(1, 8), x = rnd(2, 7); return { prompt: `Expand and simplify ${a}(x + ${b}) + ${c}(x + ${d}), then find its value when x = ${x}`, answer: String((a + c) * x + a * b + c * d), hints: ['Expand each bracket separately.', 'Then collect the x terms and the numbers.'] } }
     },
     slips: [
-      { code: 'partial-expand', when: () => false, fix: 'Every term inside the bracket gets multiplied, not just the first one.' }
+      { code: 'partial-expand', when: (g, q) => { const m = q.prompt.match(/Expand (\d+)\(x ([+-]) (\d+)\), then find its value when x = (\d+)/); if (!m) return false; const a = N(m[1]), sign = m[2] === '+' ? 1 : -1, b = N(m[3]), x = N(m[4]); return eq(g, a * x + sign * b) }, fix: 'Every term inside the bracket gets multiplied, not just the first one.' }
     ]
   },
 
@@ -637,7 +664,7 @@ export const extraContent = {
       3: () => { const a = rnd(2, 5), b = rnd(2, 5), c = rnd(2, 5), one = rnd(2, 12); const total = (a + b + c) * one; return { prompt: `Share ${total} in the ratio ${a}:${b}:${c}. What is the largest share?`, answer: String(Math.max(a, b, c) * one), hints: [`Total shares: ${a + b + c}.`, 'Find one share, then multiply.'] } }
     },
     slips: [
-      { code: 'divided-by-part', when: () => false, fix: 'Divide by the total number of shares, which means adding the ratio numbers first.' }
+      { code: 'divided-by-part', when: (g, q) => { const m = q.prompt.match(/Share (\d+) in the ratio (\d+):(\d+)/); if (!m) return false; const t = N(m[1]); return eq(g, t / N(m[2])) || eq(g, t / N(m[3])) }, fix: 'Divide by the total number of shares, which means adding the ratio numbers first.' }
     ]
   }
 }
