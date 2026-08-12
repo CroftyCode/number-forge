@@ -25,6 +25,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # Undefined variables compile fine and only fail in the browser, so the
+      # lint and the generator checks gate the deploy.
+      - run: npm run lint
+      - run: node sanity.mjs
+      - run: node slip-test.mjs
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
